@@ -1,7 +1,10 @@
 # config.py
 from __future__ import annotations
 
+import os
 import random
+import shutil
+import stat
 from collections.abc import Mapping, MutableMapping
 from pathlib import Path
 from types import MappingProxyType, UnionType
@@ -12,6 +15,172 @@ from astrbot.core.config.astrbot_config import AstrBotConfig
 from astrbot.core.star.context import Context
 from astrbot.core.star.star_tools import StarTools
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_path
+
+# 插件更名（astrbot_plugin_qqadmin -> astrbot_plugin_qqadmin_fix）后的
+# 数据迁移源/目标名。配置文件名与数据目录名都由这两个常量拼装。
+_LEGACY_PLUGIN_NAME = "astrbot_plugin_qqadmin"
+_PLUGIN_NAME = "astrbot_plugin_qqadmin_fix"
+
+
+def _resolve_data_root(data_root: str | Path | None = None) -> Path:
+    """返回 AstrBot data 根目录。
+
+    默认由 ``get_astrbot_plugin_path()``（形如 ``<data>/plugins``）取 ``.parent`` 推导；
+    测试可显式传入临时目录，避免依赖真实 AstrBot 环境。
+    """
+    if data_root is not None:
+        return Path(data_root)
+    return Path(get_astrbot_plugin_path()).parent
+
+
+def migrate_legacy_config_file(data_root: str | Path | None = None) -> bool:
+    """旧配置存在且新配置不存在时，复制旧配置为新配置。
+
+    返回是否发生了迁移；任何可预期异常都被吞掉并记为告警，绝不抛出。
+    """
+    old: Path | None = None
+    new: Path | None = None
+    tmp: Path | None = None
+    try:
+        root = _resolve_data_root(data_root)
+        old = root / "config" / f"{_LEGACY_PLUGIN_NAME}_config.json"
+        new = root / "config" / f"{_PLUGIN_NAME}_config.json"
+        tmp = new.parent / f".{new.name}.tmp"
+        if new.exists():
+            return False
+        if not old.exists():
+            return False
+        new.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(old, tmp)
+        tmp.chmod(tmp.stat().st_mode | stat.S_IWRITE)
+        os.replace(tmp, new)
+    except (OSError, shutil.Error) as exc:
+        if tmp is not None:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError as cleanup_exc:
+                logger.warning(
+                    f"[migration] 清理配置迁移临时文件失败: {tmp}（原因: {cleanup_exc}）"
+                )
+        logger.warning(
+            f"[migration] 迁移插件配置失败: {old} -> {new}（原因: {exc}）"
+        )
+        return False
+    logger.info(f"[migration] 已迁移插件配置: {old} -> {new}")
+    return True
+
+
+def _is_auto_created_skeleton(path: Path) -> bool:
+    """判断目录是否仅包含插件初始化时自动创建的空骨架。"""
+    if not path.is_dir():
+        return False
+
+    skeleton_dirs = {"group_notice", "file", "welcome_images"}
+    for entry in path.iterdir():
+        if entry.is_dir():
+            if entry.name not in skeleton_dirs or any(entry.iterdir()):
+                return False
+            continue
+        if not entry.is_file() or entry.name != "curfew_data.json":
+            return False
+        try:
+            content = entry.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            # 不可读或非 UTF-8 时无法确认为空骨架，保守视为已有数据。
+            return False
+        if content not in ("", "{}"):
+            return False
+    return True
+
+
+def migrate_legacy_data_dir(data_root: str | Path | None = None) -> bool:
+    """按判定顺序迁移旧插件数据目录。
+
+    判定顺序（先命中先返回）：
+    1. 旧目录不存在 -> 返回 False；
+    2. 新路径存在但不是目录 -> 告警并返回 False，绝不覆盖；
+    3. 新目录存在但并非自动骨架 -> 告警并返回 False，保留双方数据；
+    4. 新目录不存在、为空或仅含自动骨架 -> 优先整体移动旧目录；
+    5. 移动失败 -> 回退非破坏性复制并保留旧目录，告警提示人工核对。
+
+    返回是否发生了迁移；任何可预期异常都被吞掉并记为告警，绝不抛出。
+    """
+    old: Path | None = None
+    new: Path | None = None
+    try:
+        root = _resolve_data_root(data_root)
+        old = root / "plugin_data" / _LEGACY_PLUGIN_NAME
+        new = root / "plugin_data" / _PLUGIN_NAME
+        if not old.is_dir():
+            return False
+        if new.exists() and not new.is_dir():
+            logger.warning(f"[migration] 新数据路径已存在且不是目录，跳过迁移: {new}")
+            return False
+        if new.is_dir():
+            if not _is_auto_created_skeleton(new):
+                logger.warning(
+                    f"[migration] 新数据目录已有内容，跳过以免覆盖: {new}"
+                )
+                return False
+            try:
+                new.rmdir()
+            except OSError:
+                # 自动骨架非空时无法整体重命名，改为只增量合并。
+                if not _is_auto_created_skeleton(new):
+                    logger.warning(
+                        f"[migration] 新数据目录已有内容，跳过以免覆盖: {new}"
+                    )
+                    return False
+                new.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(old, new, dirs_exist_ok=True, symlinks=True)
+                logger.warning(
+                    f"[migration] 新数据目录仅含自动骨架，已复制并保留旧目录: {old} -> {new}"
+                )
+                return True
+        try:
+            os.rename(old, new)
+        except OSError as exc:
+            new.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(old, new, dirs_exist_ok=True, symlinks=True)
+            logger.warning(
+                f"[migration] 移动失败，已改为复制并保留旧目录: {old} -> {new}（原因: {exc}）"
+            )
+            return True
+        logger.info(f"[migration] 已迁移插件数据目录: {old} -> {new}")
+        return True
+    except (OSError, shutil.Error) as exc:
+        logger.warning(
+            f"[migration] 迁移插件数据目录失败: {old} -> {new}（原因: {exc}）"
+        )
+        return False
+
+
+def migrate_legacy_state(data_root: str | Path | None = None) -> None:
+    """总入口：依次迁移配置与数据目录。
+
+    该函数在插件模块导入期被调用，因此必须兜底捕获所有异常，只记日志不抛出，
+    保证迁移失败不会阻断插件加载。
+    """
+    try:
+        try:
+            migrate_legacy_config_file(data_root)
+        except Exception as exc:
+            logger.warning(
+                f"[migration] 自动迁移失败，插件将继续加载，请手动检查旧配置: {exc}",
+                exc_info=True,
+            )
+        try:
+            migrate_legacy_data_dir(data_root)
+        except Exception as exc:
+            logger.warning(
+                f"[migration] 自动迁移失败，插件将继续加载，请手动检查旧数据: {exc}",
+                exc_info=True,
+            )
+    except Exception as exc:
+        logger.warning(
+            f"[migration] 自动迁移失败，插件将继续加载，请手动检查旧数据: {exc}",
+            exc_info=True,
+        )
 
 
 class ConfigNode:
@@ -123,7 +292,7 @@ class PluginConfig(ConfigNode):
     perms: dict
 
     _db_version = 3
-    _plugin_name: str = "astrbot_plugin_qqadmin_fix"
+    _plugin_name: str = _PLUGIN_NAME
 
     def __init__(self, cfg: AstrBotConfig, context: Context):
         super().__init__(cfg)

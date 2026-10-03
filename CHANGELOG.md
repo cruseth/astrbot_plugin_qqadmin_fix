@@ -9,7 +9,8 @@
 - 欢迎语支持 `{at}`、`{qq}`、`{nickname}`；欢迎发送失败不影响进群禁言。
 - 欢迎语安全支持 CQ 数字提及和本地/公开 HTTP 图片，限制路径、地址、大小、像素与图片数量；昵称不执行 CQ，未知 CQ 保留文字，图片失败不阻断其他欢迎内容。
 - 新增“欢迎 CQ 提及”与“欢迎 CQ 图片”两个配置项（默认开启），可分别关闭欢迎语中的 `{at}`/`[CQ:at,...]` 提及与 `[CQ:image,...]` 图片加载，关闭后对应内容保留为普通文字。
-- 插件更名为 `astrbot_plugin_qqadmin_fix`：插件目录、metadata、数据目录与 WebUI 路由前缀统一改名，与修复仓库一致。升级后数据目录由 `data/plugin_data/astrbot_plugin_qqadmin` 变为 `data/plugin_data/astrbot_plugin_qqadmin_fix`，需自行迁移原有群配置与欢迎图片。
+- 插件更名为 `astrbot_plugin_qqadmin_fix`：插件目录、metadata、数据目录与 WebUI 路由前缀统一改名，与修复仓库一致。
+- 新增旧版数据自动迁移：首次加载新版时，旧数据目录 `data/plugin_data/astrbot_plugin_qqadmin/` 会整体移动为新名字目录，旧面板配置 `data/config/astrbot_plugin_qqadmin_config.json` 会复制为新名字配置（旧配置保留）。迁移在模块导入时执行，即使新版被禁用也会触发；请先停用旧版并确认新版数据正常，再删除旧数据。新目录已有真实数据时跳过以免覆盖。
 - 补充运行依赖与回归测试。
 - 本次不合并 PR #133 / #98 的原始实现。
 

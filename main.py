@@ -10,7 +10,7 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
 )
 from astrbot.core.star.filter.event_message_type import EventMessageType
 
-from .config import PluginConfig
+from .config import PluginConfig, migrate_legacy_state
 from .core import (
     BanproHandle,
     CurfewHandle,
@@ -30,6 +30,10 @@ from .permission import (
 )
 from .utils import parse_bool
 from .web import QQAdminWebController
+
+# 插件更名后首次导入即触发旧数据迁移；必须在类定义前执行，且早于
+# AstrBotConfig 建/读新配置与 PluginConfig 创建新数据目录。
+migrate_legacy_state()
 
 
 class QQAdminPlugin(Star):

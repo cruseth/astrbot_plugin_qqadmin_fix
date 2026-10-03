@@ -25,6 +25,10 @@ _✨ QQ群管插件 ✨_
 
 本仓库是修复分支，未发布到插件市场。请在 AstrBot 中通过插件仓库地址 `https://github.com/cruseth/astrbot_plugin_qqadmin_fix` 安装，或手动放置到 `data/plugins/astrbot_plugin_qqadmin_fix`。  
 
+从旧版 `astrbot_plugin_qqadmin` 升级时，首次加载本插件会自动迁移旧数据：插件数据目录 `data/plugin_data/astrbot_plugin_qqadmin/` 会整体移动为 `data/plugin_data/astrbot_plugin_qqadmin_fix/`，面板配置 `data/config/astrbot_plugin_qqadmin_config.json` 会复制为 `data/config/astrbot_plugin_qqadmin_fix_config.json`（旧配置保留不动）。群配置、欢迎图片与面板设置都会一并保留。
+
+迁移在插件模块导入时执行，因此即使新版处于禁用状态也会触发；升级前请先停用旧版插件，避免两个插件同时运行。确认新版数据正常后，再删除旧数据目录。若新数据目录已存在真实数据，自动迁移会跳过以免覆盖，此时需手动处理。
+
 ## ⌨️ 使用说明
 
 群管功能丰富，指令繁多，可以发送“/群管帮助”命令来查看具体用法。
