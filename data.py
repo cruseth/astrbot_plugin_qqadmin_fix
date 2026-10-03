@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import json
+import re
 from functools import wraps
 
 import aiosqlite
@@ -49,8 +50,9 @@ class QQAdminDB:
         "reject_word_block": "命中黑词拉黑",
         "block_ids": "进群黑名单",
         "join_welcome": "进群欢迎词",
-        "join_welcome_cq_mention": "欢迎 CQ 提及",
-        "join_welcome_cq_image": "欢迎 CQ 图片",
+        "join_welcome_mention": "欢迎时 @ 新成员",
+        "join_welcome_image": "欢迎图片",
+        "join_welcome_image_before": "欢迎图片放在欢迎语之前",
         "join_ban_time": "进群禁言时长",
         "leave_notify": "主动退群通知",
         "leave_block": "主动退群拉黑",
@@ -62,6 +64,77 @@ class QQAdminDB:
 
     REVERSE_FIELD_MAP = {v: k for k, v in FIELD_MAP.items()}
     FOLLOW_DEFAULT_MARKER = "__follow_default__"
+    LEGACY_WELCOME_KEYS = (
+        "join_welcome_cq_mention",
+        "join_welcome_cq_image",
+    )
+    _CQ_IMAGE_RE = re.compile(r"\[CQ:image,[^\]]*\]", re.IGNORECASE)
+
+    def _legacy_record_follows_default(self, data: dict) -> bool:
+        marker = data.get(self.FOLLOW_DEFAULT_MARKER)
+        if marker is False:
+            return False
+        if marker is True:
+            return True
+
+        old_mention = data.get("join_welcome_cq_mention")
+        old_image = data.get("join_welcome_cq_image")
+        if (isinstance(old_mention, bool) and old_mention is not True) or (
+            isinstance(old_image, bool) and old_image is not True
+        ):
+            return False
+
+        clean = {
+            key: value
+            for key, value in data.items()
+            if key != self.FOLLOW_DEFAULT_MARKER
+            and key not in self.LEGACY_WELCOME_KEYS
+        }
+        if not clean:
+            return True
+        for key, value in clean.items():
+            if key not in self.default_cfg or value != self.default_cfg[key]:
+                return False
+        return True
+
+    def _migrate_welcome_record(self, data: dict) -> tuple[dict, bool]:
+        changed = False
+        follows_default = self._legacy_record_follows_default(data)
+        missing = object()
+        old_mention = data.pop("join_welcome_cq_mention", missing)
+        old_image = data.pop("join_welcome_cq_image", missing)
+        if old_mention is not missing or old_image is not missing:
+            changed = True
+
+        if follows_default:
+            return data, changed
+
+        if data.get(self.FOLLOW_DEFAULT_MARKER) is not False:
+            data[self.FOLLOW_DEFAULT_MARKER] = False
+            changed = True
+
+        if "join_welcome_mention" not in data or data.get("join_welcome_mention") is None:
+            data["join_welcome_mention"] = (
+                old_mention if isinstance(old_mention, bool) else True
+            )
+            changed = True
+        if "join_welcome_image" not in data or data.get("join_welcome_image") is None:
+            data["join_welcome_image"] = []
+            changed = True
+        if (
+            "join_welcome_image_before" not in data
+            or data.get("join_welcome_image_before") is None
+        ):
+            data["join_welcome_image_before"] = False
+            changed = True
+
+        if old_image is False and isinstance(data.get("join_welcome"), str):
+            cleaned = self._CQ_IMAGE_RE.sub("", data["join_welcome"])
+            if cleaned != data["join_welcome"]:
+                data["join_welcome"] = cleaned
+                changed = True
+
+        return data, changed
 
     # ================================================================
 
@@ -101,6 +174,24 @@ class QQAdminDB:
                         cache[row["group_id"]] = json.loads(row["data"])
                     except Exception:
                         logger.exception("解析 group 数据失败: %s", row["group_id"])
+
+            for gid, record in list(cache.items()):
+                if not isinstance(record, dict):
+                    logger.warning("跳过无法迁移的群配置: %s", gid)
+                    cache.pop(gid, None)
+                    continue
+                try:
+                    candidate = copy.deepcopy(record)
+                    candidate, changed = self._migrate_welcome_record(candidate)
+                    if changed:
+                        await self._save_to_db(gid, candidate)
+                        cache[gid] = candidate
+                except Exception as exc:
+                    logger.warning(
+                        "欢迎配置群记录迁移失败，已跳过: %s（原因: %s）",
+                        gid,
+                        exc,
+                    )
         except BaseException:
             if self._conn:
                 await self._finish_cleanup(self._conn.close())

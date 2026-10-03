@@ -17,6 +17,7 @@ from .config import PluginConfig
 from .data import QQAdminDB
 from .group_info_cache import QQGroupInfoCache
 from .page_service import QQAdminPageService
+from .page_service import PageRequestError
 
 PLUGIN_NAME = "astrbot_plugin_qqadmin_fix"
 
@@ -66,6 +67,18 @@ class QQAdminWebController:
                 ["POST"],
                 "Reset one group config",
             ),
+            (
+                "/settings/groups/<group_id>/welcome-image/upload",
+                self.page_upload_group_welcome_image,
+                ["POST"],
+                "Upload group welcome image",
+            ),
+            (
+                "/settings/groups/<group_id>/welcome-image/delete",
+                self.page_delete_group_welcome_image,
+                ["POST"],
+                "Delete group welcome image",
+            ),
         ]
         for path, handler, methods, desc in routes:
             self.context.register_web_api(
@@ -91,12 +104,14 @@ class QQAdminWebController:
         return cast(Any, quart_request_obj)
 
     def _wrap_handler(
-        self, handler: Callable[[], Awaitable]
-    ) -> Callable[[], Awaitable]:
-        async def wrapped():
+        self, handler: Callable[..., Awaitable]
+    ) -> Callable[..., Awaitable]:
+        async def wrapped(*args, **kwargs):
             self._check_quart_available()
             try:
-                return await handler()
+                return await handler(*args, **kwargs)
+            except PageRequestError as exc:
+                return self._jsonify({"ok": False, "message": str(exc)}), exc.status
             except ValueError as exc:
                 return self._jsonify({"ok": False, "message": str(exc)}), 400
             except Exception as exc:
@@ -162,4 +177,24 @@ class QQAdminWebController:
         result = await self.service.reset_group_config(group_id)
         return self._jsonify(
             {"ok": True, "message": "Group config reset", "data": result}
+        )
+
+    async def page_upload_group_welcome_image(self, group_id: str):
+        files = await self._request().files
+        file = files.get("file") if files else None
+        if file is None:
+            raise PageRequestError("Missing uploaded file", 400)
+        result = await self.service.upload_group_welcome_image(group_id, file)
+        return self._jsonify(
+            {"ok": True, "message": "Uploaded", "data": result}
+        )
+
+    async def page_delete_group_welcome_image(self, group_id: str):
+        payload = await self._request().get_json(force=True, silent=True) or {}
+        path = payload.get("path")
+        if not isinstance(path, str) or not path:
+            raise PageRequestError("Missing image path", 400)
+        result = await self.service.delete_group_welcome_image(group_id, path)
+        return self._jsonify(
+            {"ok": True, "message": "Deleted", "data": result}
         )

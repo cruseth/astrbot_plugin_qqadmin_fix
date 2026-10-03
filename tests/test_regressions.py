@@ -368,30 +368,32 @@ def test_welcome_components_and_failure_isolation(code, tmp_path):
     run(scenario())
 
 
-def test_welcome_cq_switches_chinese_field_map(code, tmp_path):
+def test_welcome_upload_chinese_field_map(code, tmp_path):
     field_map = code.data.QQAdminDB.FIELD_MAP
-    assert field_map["join_welcome_cq_mention"] == "欢迎 CQ 提及"
-    assert field_map["join_welcome_cq_image"] == "欢迎 CQ 图片"
+    assert field_map["join_welcome_mention"] == "欢迎时 @ 新成员"
+    assert field_map["join_welcome_image"] == "欢迎图片"
+    assert field_map["join_welcome_image_before"] == "欢迎图片放在欢迎语之前"
     reverse = code.data.QQAdminDB.REVERSE_FIELD_MAP
-    assert reverse["欢迎 CQ 提及"] == "join_welcome_cq_mention"
-    assert reverse["欢迎 CQ 图片"] == "join_welcome_cq_image"
+    assert reverse["欢迎时 @ 新成员"] == "join_welcome_mention"
+    assert reverse["欢迎图片"] == "join_welcome_image"
+    assert reverse["欢迎图片放在欢迎语之前"] == "join_welcome_image_before"
 
     async def scenario():
         cfg = types.SimpleNamespace(
             db_path=tmp_path / "field-map.db",
-            default={"join_welcome_cq_mention": True, "join_welcome_cq_image": True},
+            default={"join_welcome_mention": True, "join_welcome_image": [], "join_welcome_image_before": False},
         )
         db = code.data.QQAdminDB(cfg)
         await db.init()
         try:
             exported = await db.export_cn_lines("10")
-            assert "欢迎 CQ 提及: 开" in exported
-            assert "欢迎 CQ 图片: 开" in exported
-            assert "join_welcome_cq_mention" not in exported
+            assert "欢迎时 @ 新成员: 开" in exported
+            assert "欢迎图片: " in exported
+            assert "join_welcome_mention" not in exported
             updated = await db.import_cn_lines(
-                "10", "欢迎 CQ 提及: 关\n欢迎 CQ 图片: 关")
-            assert updated["join_welcome_cq_mention"] is False
-            assert updated["join_welcome_cq_image"] is False
+                "10", "欢迎时 @ 新成员: 关\n欢迎图片放在欢迎语之前: 开")
+            assert updated["join_welcome_mention"] is False
+            assert updated["join_welcome_image_before"] is True
         finally:
             await db.close()
     run(scenario())

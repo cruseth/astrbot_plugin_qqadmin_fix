@@ -101,7 +101,7 @@ def test_real_cq_nickname_and_unknown(code, directory):
     chain = run(code.w.build_welcome(
         "{nickname}{at}[CQ:at,qq={qq}][CQ:at,qq=123]&#91;CQ:at,qq=all&#93;" + raw,
         "20", nickname, directory))
-    assert [p.qq for p in chain if isinstance(p, At)] == ["20", "20", "123"]
+    assert [p.qq for p in chain if isinstance(p, At)] == ["20", "123"]
     assert nickname in text(chain) and raw in text(chain)
     assert "[CQ:at,qq=all]" in text(chain)
     assert not any(isinstance(p, Image) for p in chain)
@@ -111,9 +111,10 @@ def test_local_real_image_and_bytes(code, directory):
     path = directory / "ok.png"
     path.write_bytes(png())
     chain = run(code.w.build_welcome("[CQ:image,file=ok.png]", "20", "", directory))
-    assert isinstance(chain[0], Image)
+    assert isinstance(chain[0], At) and chain[0].qq == "20"
+    assert isinstance(chain[1], Image)
     path.write_bytes(b"replaced")
-    assert chain[0].data == png()
+    assert chain[1].data == png()
 
 
 @pytest.mark.parametrize("source", [
@@ -124,7 +125,7 @@ def test_local_rejections(code, directory, source):
     chain = run(code.w.build_welcome(
         "before{at}[CQ:image,file=" + source + "]after", "20", "", directory))
     assert text(chain) == "before[欢迎图片不可用]after"
-    assert isinstance(chain[1], At)
+    assert isinstance(chain[0], At)
     assert source not in text(chain)
 
 
@@ -183,7 +184,8 @@ def test_invalid_cq_keeps_original_without_substitution(code, directory):
     raw = "[CQ:at,qq={nickname}][CQ:image,file=ok.png,extra=1][CQ:thing,x={at}&#44;x]"
     chain = run(code.w.build_welcome(raw, "20", "123", directory))
     assert text(chain) == raw
-    assert all(isinstance(p, Plain) for p in chain)
+    assert isinstance(chain[0], At) and chain[0].qq == "20"
+    assert all(isinstance(p, Plain) for p in chain[1:])
 
 
 @pytest.mark.parametrize("url", [
@@ -392,28 +394,27 @@ def test_ban_failure_still_sends_welcome(code, directory, monkeypatch):
     event.send.assert_awaited_once()
 
 
-def test_schema_exposes_welcome_cq_switches():
+def test_schema_exposes_welcome_upload_switches():
     schema = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
     items = schema["default"]["items"]
-    keys = list(items)
-    assert keys.index("join_welcome_cq_mention") > keys.index("join_welcome")
-    assert keys.index("join_welcome_cq_image") > keys.index("join_welcome")
-    mention = items["join_welcome_cq_mention"]
-    image = items["join_welcome_cq_image"]
-    assert mention["description"] == "欢迎 CQ 提及"
-    assert image["description"] == "欢迎 CQ 图片"
-    for field in (mention, image):
-        assert field["type"] == "bool"
-        assert field["default"] is True
-        assert field["hint"]
+    assert "join_welcome_cq_mention" not in items
+    assert "join_welcome_cq_image" not in items
+    mention = items["join_welcome_mention"]
+    image = items["join_welcome_image"]
+    before = items["join_welcome_image_before"]
+    assert mention["type"] == "bool" and mention["default"] is True
+    assert image["type"] == "file" and image["default"] == []
+    assert image["file_types"] == ["png", "jpg", "jpeg", "gif", "webp", "bmp"]
+    assert before["type"] == "bool" and before["default"] is False
+    assert mention["hint"] and image["hint"] and before["hint"]
 
 
 def test_mention_disabled_keeps_plain_text(code, directory):
     chain = run(code.w.build_welcome(
         "hi {at} [CQ:at,qq=123] [CQ:at,qq={qq}]", "20", "nick", directory,
         cq_mention=False))
-    assert not any(isinstance(p, At) for p in chain)
-    assert text(chain) == "hi {at} [CQ:at,qq=123] [CQ:at,qq={qq}]"
+    assert [p.qq for p in chain if isinstance(p, At)] == ["123"]
+    assert text(chain) == "hi {at}  [CQ:at,qq={qq}]"
 
 
 def test_image_disabled_keeps_plain_text_without_loading(code, directory, monkeypatch):
@@ -460,16 +461,26 @@ def test_event_monitoring_passes_welcome_switches(code, directory, monkeypatch):
     builder = AsyncMock(return_value=[Plain("welcome")])
     event = increase_event(
         code, directory, monkeypatch, builder,
-        {"join_welcome_cq_mention": False, "join_welcome_cq_image": False},
+        {"join_welcome_mention": False, "join_welcome_image_before": True},
     )
-    assert builder.await_args.kwargs == {"cq_mention": False, "cq_image": False}
+    assert builder.await_args.kwargs == {
+        "mention": False,
+        "images": [],
+        "image_before": True,
+        "group_id": "10",
+    }
     event.send.assert_awaited_once()
 
 
 def test_event_monitoring_defaults_welcome_switches_on(code, directory, monkeypatch):
     builder = AsyncMock(return_value=[Plain("welcome")])
     event = increase_event(code, directory, monkeypatch, builder, {})
-    assert builder.await_args.kwargs == {"cq_mention": True, "cq_image": True}
+    assert builder.await_args.kwargs == {
+        "mention": True,
+        "images": [],
+        "image_before": False,
+        "group_id": "10",
+    }
     event.send.assert_awaited_once()
 
 
@@ -492,15 +503,21 @@ def test_event_monitoring_reads_switches_from_snapshot(code, directory, monkeypa
     snapshot = {
         "join_welcome": "welcome",
         "join_ban_time": 0,
-        "join_welcome_cq_mention": False,
-        "join_welcome_cq_image": False,
+        "join_welcome_mention": False,
+        "join_welcome_image": [],
+        "join_welcome_image_before": True,
     }
     handler = code.join.JoinHandle(
         types.SimpleNamespace(welcome_image_dir=directory),
         types.SimpleNamespace(get=get, get_group_snapshot=lambda gid: dict(snapshot)))
     run(handler.event_monitoring(event))
 
-    assert builder.await_args.kwargs == {"cq_mention": False, "cq_image": False}
+    assert builder.await_args.kwargs == {
+        "mention": False,
+        "images": [],
+        "image_before": True,
+        "group_id": "10",
+    }
     assert "join_welcome_cq_mention" not in read_keys
     assert "join_welcome_cq_image" not in read_keys
     event.send.assert_awaited_once()

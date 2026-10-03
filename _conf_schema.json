@@ -71,21 +71,35 @@
       },
       "join_welcome": {
         "description": "进群欢迎词",
-        "hint": "支持 {at}、{qq}、{nickname}，以及 [CQ:at,qq={qq}]、[CQ:image,file=welcome.png] 或公开 http/https 图片。每次最多3张、每张5MB；本地图片放插件数据目录 welcome_images。禁止提及all，未知CQ原样显示，昵称不会执行CQ，图片路径不支持占位符。",
+        "hint": "支持 {qq}、{nickname} 两个占位符。@ 新成员由“欢迎时 @ 新成员”控制，图片请在“欢迎图片”上传，无需填写 CQ 码。",
         "type": "string",
         "default": ""
       },
-      "join_welcome_cq_mention": {
-        "description": "欢迎 CQ 提及",
-        "hint": "关闭后，欢迎语中的 {at} 和 [CQ:at,...] 不再生成真正的提及，只作为普通文字原样发送。",
+      "join_welcome_mention": {
+        "description": "欢迎时 @ 新成员",
+        "hint": "开启后，欢迎消息最前面会 @ 新成员；文本中的 {at} 或 CQ at 不会重复生成提及。",
         "type": "bool",
         "default": true
       },
-      "join_welcome_cq_image": {
-        "description": "欢迎 CQ 图片",
-        "hint": "关闭后，欢迎语中的 [CQ:image,...] 不再加载图片，只作为普通文字原样发送。本地图片与远程图片的安全限制保持不变。",
+      "join_welcome_image": {
+        "description": "欢迎图片",
+        "hint": "可上传多张图片；每张不超过 5MB，最多 3 张，支持 PNG、JPEG、GIF、WebP、BMP。默认模板图片在此管理，具体群可在“QQ群管”页面覆盖。内置配置页的上传限制更宽松，超过 5MB 的图片只会在发送时显示为不可用。",
+        "type": "file",
+        "default": [],
+        "file_types": [
+          "png",
+          "jpg",
+          "jpeg",
+          "gif",
+          "webp",
+          "bmp"
+        ]
+      },
+      "join_welcome_image_before": {
+        "description": "欢迎图片放在欢迎语之前",
+        "hint": "关闭：@新成员 + 欢迎语 + 图片；开启：@新成员 + 图片 + 欢迎语。@ 始终位于整条消息最前。该开关只作用于上传的图片；欢迎词里的旧 CQ 图片仍按文本位置发送。",
         "type": "bool",
-        "default": true
+        "default": false
       },
       "join_ban_time": {
         "description": "进群禁言时长",

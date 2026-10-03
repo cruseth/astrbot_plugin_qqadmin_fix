@@ -556,6 +556,103 @@ img {
     width: 100%;
 }
 
+.file-field .field-control {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: 10px;
+}
+
+.file-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+    min-width: 0;
+}
+
+.file-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-width: 0;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.5);
+}
+
+[data-theme="dark"] .file-item {
+    background: rgba(21, 28, 37, 0.72);
+}
+
+.file-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    color: var(--text);
+}
+
+.file-actions {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.upload-button,
+.delete-button {
+    border: none;
+    border-radius: 999px;
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1.2;
+    padding: 7px 12px;
+    transition:
+        transform 0.18s ease,
+        background 0.18s ease,
+        color 0.18s ease;
+}
+
+.upload-button {
+    align-self: flex-start;
+    background: var(--accent-soft);
+    color: var(--accent-dark);
+}
+
+.delete-button {
+    background: var(--danger-soft);
+    color: var(--danger);
+}
+
+.upload-button:hover:not(:disabled),
+.delete-button:hover:not(:disabled) {
+    transform: translateY(-1px);
+}
+
+.upload-button:disabled,
+.delete-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+    transform: none;
+}
+
+.hidden-file-input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
 .field.checkbox-field {
     flex-direction: row;
     align-items: center;
@@ -834,5 +931,9 @@ img {
 
     .field-grid.single-column .field-control {
         justify-content: flex-start;
+    }
+
+    .file-item {
+        align-items: flex-start;
     }
 }

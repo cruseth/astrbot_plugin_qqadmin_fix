@@ -342,22 +342,25 @@ class JoinHandle:
                     pass
             # 进群欢迎
             join_welcome = await self.db.get(gid, "join_welcome")
-            if join_welcome:
-                # 开关与自定义面板同源，取有效配置快照，避免 db.get 的缺省写回造成分叉
-                group_config = self.db.get_group_snapshot(gid)
+            group_config = self.db.get_group_snapshot(gid)
+            welcome_images = list(group_config.get("join_welcome_image") or [])
+            if join_welcome or welcome_images:
                 try:
                     nickname = await get_nickname(event, uid)
+                    data_dir = getattr(self.cfg, "data_dir", None) or self.cfg.welcome_image_dir
                     chain = await build_welcome(
                         join_welcome,
                         uid,
                         nickname,
-                        self.cfg.welcome_image_dir,
-                        cq_mention=bool(
-                            group_config.get("join_welcome_cq_mention", True)
+                        data_dir,
+                        mention=bool(
+                            group_config.get("join_welcome_mention", True)
                         ),
-                        cq_image=bool(
-                            group_config.get("join_welcome_cq_image", True)
+                        images=welcome_images,
+                        image_before=bool(
+                            group_config.get("join_welcome_image_before", False)
                         ),
+                        group_id=gid,
                     )
                     await event.send(event.chain_result(chain))
                 except Exception as e:

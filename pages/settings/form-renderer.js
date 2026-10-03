@@ -42,6 +42,196 @@ function setByPath(target, path, value) {
   });
 }
 
+function normalizeFileValue(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((item) => typeof item === "string" && item.trim())
+    .map((item) => item.trim());
+}
+
+function getFileBasename(filePath) {
+  const normalized = String(filePath || "");
+  const parts = normalized.split(/[\\/]/);
+  return parts[parts.length - 1] || normalized;
+}
+
+function buildFileAccept(fileTypes) {
+  if (!Array.isArray(fileTypes) || fileTypes.length === 0) {
+    return "";
+  }
+  return fileTypes
+    .map((extension) => String(extension || "").trim().replace(/^\.+/, ""))
+    .filter(Boolean)
+    .map((extension) => `.${extension}`)
+    .join(",");
+}
+
+function showFileActionError(options, error, fallbackMessage) {
+  const message = error?.message || fallbackMessage;
+  if (typeof options.showToast === "function") {
+    options.showToast(message, "error");
+    return;
+  }
+  console.error(message, error);
+}
+
+function buildFileField(path, key, schema, value, options, disabled) {
+  const field = document.createElement("div");
+  field.className = "field file-field";
+  if (disabled) {
+    field.classList.add("is-disabled");
+  }
+
+  const copy = document.createElement("div");
+  copy.className = "field-copy";
+
+  const label = document.createElement("div");
+  label.className = "field-label";
+  label.textContent = schema.description || key;
+  copy.appendChild(label);
+
+  if (schema.hint) {
+    const hint = document.createElement("div");
+    hint.className = "field-hint";
+    hint.textContent = schema.hint;
+    copy.appendChild(hint);
+  }
+
+  field.appendChild(copy);
+
+  const control = document.createElement("div");
+  control.className = "field-control";
+
+  const list = document.createElement("div");
+  list.className = "file-list";
+
+  const uploadButton = document.createElement("button");
+  uploadButton.type = "button";
+  uploadButton.className = "upload-button file-upload-button";
+  uploadButton.textContent = "上传文件";
+  uploadButton.disabled = disabled;
+
+  const hiddenInput = document.createElement("input");
+  hiddenInput.type = "file";
+  hiddenInput.className = "hidden-file-input";
+  hiddenInput.dataset.path = path;
+  hiddenInput.dataset.type = "file";
+  hiddenInput.disabled = disabled;
+  hiddenInput.tabIndex = -1;
+  const accept = buildFileAccept(schema.file_types);
+  if (accept) {
+    hiddenInput.accept = accept;
+  }
+
+  let currentValue = normalizeFileValue(value);
+  let busy = false;
+
+  const renderList = () => {
+    list.innerHTML = "";
+    currentValue.forEach((filePath) => {
+      const item = document.createElement("div");
+      item.className = "file-item";
+
+      const name = document.createElement("span");
+      name.className = "file-name";
+      name.textContent = getFileBasename(filePath);
+      name.title = filePath;
+      item.appendChild(name);
+
+      const actions = document.createElement("div");
+      actions.className = "file-actions";
+
+      const deleteButton = document.createElement("button");
+      deleteButton.type = "button";
+      deleteButton.className = "delete-button file-delete-button";
+      deleteButton.textContent = "删除";
+      deleteButton.disabled = disabled || busy;
+      deleteButton.setAttribute("aria-label", `删除 ${getFileBasename(filePath)}`);
+      deleteButton.addEventListener("click", async () => {
+        if (disabled || busy) {
+          return;
+        }
+        if (typeof options.onFileDelete !== "function") {
+          showFileActionError(options, null, "删除功能不可用");
+          return;
+        }
+        setBusy(true);
+        try {
+          const nextValue = await options.onFileDelete(path, filePath);
+          syncValue(nextValue);
+        } catch (error) {
+          showFileActionError(options, error, "删除失败，请重试");
+        } finally {
+          setBusy(false);
+        }
+      });
+
+      actions.appendChild(deleteButton);
+      item.appendChild(actions);
+      list.appendChild(item);
+    });
+  };
+
+  const syncValue = (nextValue) => {
+    currentValue = normalizeFileValue(nextValue);
+    hiddenInput.dataset.value = JSON.stringify(currentValue);
+    renderList();
+  };
+
+  const setBusy = (nextBusy) => {
+    busy = Boolean(nextBusy);
+    uploadButton.disabled = disabled || busy;
+    hiddenInput.disabled = disabled || busy;
+    uploadButton.textContent = busy ? "上传中..." : "上传文件";
+    list.querySelectorAll("button").forEach((button) => {
+      button.disabled = disabled || busy;
+    });
+  };
+
+  hiddenInput.dataset.value = JSON.stringify(currentValue);
+  renderList();
+
+  uploadButton.addEventListener("click", () => {
+    if (disabled || busy) {
+      return;
+    }
+    if (typeof options.onFileUpload !== "function") {
+      showFileActionError(options, null, "上传功能不可用");
+      return;
+    }
+    hiddenInput.click();
+  });
+
+  hiddenInput.addEventListener("change", async () => {
+    const file = hiddenInput.files?.[0];
+    hiddenInput.value = "";
+    if (!file || disabled || busy) {
+      return;
+    }
+    if (typeof options.onFileUpload !== "function") {
+      showFileActionError(options, null, "上传功能不可用");
+      return;
+    }
+    setBusy(true);
+    try {
+      const nextValue = await options.onFileUpload(path, file);
+      syncValue(nextValue);
+    } catch (error) {
+      showFileActionError(options, error, "上传失败，请重试");
+    } finally {
+      setBusy(false);
+    }
+  });
+
+  control.appendChild(list);
+  control.appendChild(uploadButton);
+  control.appendChild(hiddenInput);
+  field.appendChild(control);
+  return field;
+}
+
 function buildField(path, key, schema, value, options = {}) {
   const type = schema.type || "string";
   const disabled = isDisabledPath(path, options);
@@ -139,6 +329,10 @@ function buildField(path, key, schema, value, options = {}) {
     });
     bodyHost.appendChild(grid);
     return wrapper;
+  }
+
+  if (type === "file") {
+    return buildFileField(path, key, schema, value, options, disabled);
   }
 
   const field = document.createElement("label");
@@ -260,7 +454,13 @@ export function collectFormData(root) {
     const { path, type } = node.dataset;
     let value;
 
-    if (type === "bool") {
+    if (type === "file") {
+      try {
+        value = normalizeFileValue(JSON.parse(node.dataset.value || "[]"));
+      } catch {
+        value = [];
+      }
+    } else if (type === "bool") {
       value = node.checked;
     } else if (type === "int") {
       value = Number(node.value || 0);

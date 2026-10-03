@@ -179,7 +179,21 @@ function buildGroupFormValues(groupPayload) {
   return mergedValues;
 }
 
+function isWelcomeImageUploadDisabled() {
+  if (!currentGroup) {
+    return true;
+  }
+  return Boolean(
+    currentGroup.is_default_group ||
+    currentGroup.group_id === DEFAULT_GROUP_ID ||
+    currentGroup.config?.[FOLLOW_DEFAULT_KEY]
+  );
+}
+
 function isGroupFieldDisabled(path) {
+  if (path === "join_welcome_image") {
+    return isWelcomeImageUploadDisabled();
+  }
   if (!currentGroup || currentGroup.is_default_group) {
     return false;
   }
@@ -187,6 +201,113 @@ function isGroupFieldDisabled(path) {
     return false;
   }
   return path !== FOLLOW_DEFAULT_KEY;
+}
+
+function assertWelcomeImageEditable() {
+  if (!currentGroup) {
+    throw new Error("先选择一个群");
+  }
+  if (
+    currentGroup.is_default_group ||
+    currentGroup.group_id === DEFAULT_GROUP_ID
+  ) {
+    throw new Error("默认模板图片请在 AstrBot 插件配置页管理");
+  }
+  if (currentGroup.config?.[FOLLOW_DEFAULT_KEY]) {
+    throw new Error("当前群正在跟随默认配置，请先关闭“跟随默认配置”");
+  }
+}
+
+function getWelcomeImageEndpoint(action, groupId) {
+  const targetGroupId = String(groupId || currentGroup?.group_id || "").trim();
+  if (!targetGroupId) {
+    throw new Error("先选择一个群");
+  }
+  return `settings/groups/${encodeURIComponent(targetGroupId)}/welcome-image/${action}`;
+}
+
+function updateGroupWelcomeImages(groupId, images) {
+  const targetGroupId = String(groupId || "");
+  const nextImages = Array.isArray(images) ? [...images] : [];
+  if (String(currentGroup?.group_id || "") === targetGroupId) {
+    currentGroup.config = currentGroup.config || {};
+    currentGroup.config.join_welcome_image = nextImages;
+  }
+  const group = (bootstrapData?.groups || []).find(
+    (item) => String(item.group_id || "") === targetGroupId
+  );
+  if (group) {
+    group.config = group.config || {};
+    group.config.join_welcome_image = nextImages;
+  }
+  return nextImages;
+}
+
+function getFormFollowDefaultValue() {
+  const followDefaultInput = els.groupForm.querySelector(
+    `[data-path="${FOLLOW_DEFAULT_KEY}"]`
+  );
+  if (!followDefaultInput) {
+    return null;
+  }
+  return Boolean(followDefaultInput.checked);
+}
+
+function syncCurrentGroupConfig(groupId, data) {
+  const targetGroupId = String(groupId || "").trim();
+  if (!targetGroupId || String(currentGroup?.group_id || "") !== targetGroupId) {
+    return;
+  }
+  const nextConfig = data?.config;
+  if (!nextConfig || typeof nextConfig !== "object") {
+    return;
+  }
+  currentGroup.config = { ...(currentGroup.config || {}), ...nextConfig };
+}
+
+// 后端按数据库状态判断是否跟随默认，开关只改内存时会与表单状态不一致，
+// 因此在上传/删除前先把关闭跟随默认的结果落盘。
+async function persistFollowDefaultBeforeImageWrite(groupId) {
+  if (getFormFollowDefaultValue() !== false) {
+    return;
+  }
+  let data;
+  try {
+    data = await persistGroupConfig(groupId, {
+      refreshList: false,
+      rerenderCurrent: false,
+    });
+  } catch (error) {
+    throw new Error(`保存当前群配置失败：${error?.message || "请重试"}`);
+  }
+  syncCurrentGroupConfig(groupId, data);
+}
+
+async function onFileUpload(path, file) {
+  assertWelcomeImageEditable();
+  const groupId = String(currentGroup?.group_id || "").trim();
+  await persistFollowDefaultBeforeImageWrite(groupId);
+  const data = await api.safeUpload(
+    getWelcomeImageEndpoint("upload", groupId),
+    file
+  );
+  return updateGroupWelcomeImages(
+    groupId,
+    Array.isArray(data) ? data : data?.images
+  );
+}
+
+async function onFileDelete(path, filePath) {
+  assertWelcomeImageEditable();
+  const groupId = String(currentGroup?.group_id || "").trim();
+  await persistFollowDefaultBeforeImageWrite(groupId);
+  const data = await api.safePost(getWelcomeImageEndpoint("delete", groupId), {
+    path: filePath,
+  });
+  return updateGroupWelcomeImages(
+    groupId,
+    Array.isArray(data) ? data : data?.images
+  );
 }
 
 function updateGroupActionState() {
@@ -262,6 +383,9 @@ function renderGroupForm(groupPayload) {
       singleColumn: true,
       collapsedObjectPaths: COLLAPSED_GROUP_OBJECT_PATHS,
       isFieldDisabled: isGroupFieldDisabled,
+      onFileUpload,
+      onFileDelete,
+      showToast,
     }
   );
   bindFollowDefaultToggle();

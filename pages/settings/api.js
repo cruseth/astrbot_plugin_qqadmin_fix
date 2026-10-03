@@ -1,6 +1,7 @@
 export function createApi(bridge) {
   const apiGet = bridge?.apiGet?.bind(bridge);
   const apiPost = bridge?.apiPost?.bind(bridge);
+  const upload = bridge?.upload?.bind(bridge);
 
   if (!apiGet || !apiPost) {
     throw new Error("Bridge API is unavailable");
@@ -32,8 +33,17 @@ export function createApi(bridge) {
     return unwrapBridgeResponse(response);
   }
 
+  async function safeUpload(endpoint, file) {
+    if (!upload) {
+      throw new Error("Bridge upload is unavailable");
+    }
+    const response = await upload(endpoint, file);
+    return unwrapBridgeResponse(response);
+  }
+
   return {
     safeGet,
     safePost,
+    safeUpload,
   };
 }

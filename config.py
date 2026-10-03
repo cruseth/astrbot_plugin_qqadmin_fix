@@ -5,6 +5,8 @@ import os
 import random
 import shutil
 import stat
+import json
+import re
 from collections.abc import Mapping, MutableMapping
 from pathlib import Path
 from types import MappingProxyType, UnionType
@@ -68,6 +70,98 @@ def migrate_legacy_config_file(data_root: str | Path | None = None) -> bool:
         return False
     logger.info(f"[migration] 已迁移插件配置: {old} -> {new}")
     return True
+
+
+_WELCOME_CQ_IMAGE_RE = re.compile(r"\[CQ:image,[^\]]*\]", re.IGNORECASE)
+
+
+def _remove_cq_image_tokens(text: Any) -> Any:
+    if not isinstance(text, str):
+        return text
+    return _WELCOME_CQ_IMAGE_RE.sub("", text)
+
+
+def migrate_welcome_config_file(data_root: str | Path | None = None) -> bool:
+    """迁移默认模板配置中的欢迎旧键。
+
+    只处理 ``default.items``，写回采用同目录临时文件加原子替换。函数幂等、
+    异常兜底，任何失败都只记录告警，不向插件加载流程抛出。
+    """
+    config_path: Path | None = None
+    tmp: Path | None = None
+    try:
+        root = _resolve_data_root(data_root)
+        config_path = root / "config" / f"{_PLUGIN_NAME}_config.json"
+        tmp = config_path.parent / f".{config_path.name}.tmp"
+        if not config_path.is_file():
+            return False
+
+        raw = config_path.read_bytes()
+        has_bom = raw.startswith(b"\xef\xbb\xbf")
+        data = json.loads(raw.decode("utf-8-sig"))
+        if not isinstance(data, dict):
+            logger.warning("[migration] 欢迎配置迁移跳过：配置根节点不是对象")
+            return False
+
+        default = data.get("default")
+        if not isinstance(default, dict):
+            return False
+        items = default.get("items")
+        if not isinstance(items, dict):
+            return False
+
+        changed = False
+        missing = object()
+        old_mention = items.pop("join_welcome_cq_mention", missing)
+        old_image = items.pop("join_welcome_cq_image", missing)
+        if old_mention is not missing or old_image is not missing:
+            changed = True
+
+        if "join_welcome_mention" not in items or items.get("join_welcome_mention") is None:
+            items["join_welcome_mention"] = (
+                old_mention
+                if old_mention is not missing and isinstance(old_mention, bool)
+                else True
+            )
+            changed = True
+        if "join_welcome_image" not in items or items.get("join_welcome_image") is None:
+            items["join_welcome_image"] = []
+            changed = True
+        if (
+            "join_welcome_image_before" not in items
+            or items.get("join_welcome_image_before") is None
+        ):
+            items["join_welcome_image_before"] = False
+            changed = True
+
+        if old_image is False:
+            new_welcome = _remove_cq_image_tokens(items.get("join_welcome"))
+            if new_welcome != items.get("join_welcome"):
+                items["join_welcome"] = new_welcome
+                changed = True
+
+        if not changed:
+            return False
+
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        encoding = "utf-8-sig" if has_bom else "utf-8"
+        with open(tmp, "w", encoding=encoding, newline="\n") as handle:
+            json.dump(data, handle, ensure_ascii=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, config_path)
+        logger.info("[migration] 已迁移欢迎配置旧键: %s", config_path)
+        return True
+    except Exception as exc:
+        if tmp is not None:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+        logger.warning(
+            "[migration] 欢迎配置迁移失败: %s（原因: %s）", config_path, exc
+        )
+        return False
 
 
 def _is_auto_created_skeleton(path: Path) -> bool:
@@ -167,6 +261,13 @@ def migrate_legacy_state(data_root: str | Path | None = None) -> None:
         except Exception as exc:
             logger.warning(
                 f"[migration] 自动迁移失败，插件将继续加载，请手动检查旧配置: {exc}",
+                exc_info=True,
+            )
+        try:
+            migrate_welcome_config_file(data_root)
+        except Exception as exc:
+            logger.warning(
+                f"[migration] 自动迁移欢迎配置失败，插件将继续加载，请手动检查旧配置: {exc}",
                 exc_info=True,
             )
         try:
