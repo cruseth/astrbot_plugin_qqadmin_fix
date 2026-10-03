@@ -71,7 +71,7 @@
       },
       "join_welcome": {
         "description": "进群欢迎词",
-        "hint": "发给新群友的欢迎词, 支持变量: {nickname}, 示例：欢迎{nickname}加入群聊",
+        "hint": "支持 {at}、{qq}、{nickname}，以及 [CQ:at,qq={qq}]、[CQ:image,file=welcome.png] 或公开 http/https 图片。每次最多3张、每张5MB；本地图片放插件数据目录 welcome_images。禁止提及all，未知CQ原样显示，昵称不会执行CQ，图片路径不支持占位符。",
         "type": "string",
         "default": ""
       },

@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import json
+from functools import wraps
 
 import aiosqlite
 
@@ -8,6 +9,28 @@ from astrbot.api import logger
 
 from .config import PluginConfig
 from .utils import parse_bool
+
+
+def connection_locked(method):
+    @wraps(method)
+    async def wrapped(self, *args, **kwargs):
+        async with self._write_lock:
+            # 保护完整读改写，包括提交后发布缓存；外层取消不得取消 SQLite future。
+            task = asyncio.create_task(method(self, *args, **kwargs))
+            cancelled = False
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    cancelled = True
+                except BaseException:
+                    break
+            if cancelled:
+                if not task.cancelled() and task.exception() is not None:
+                    logger.error("取消期间数据库操作失败: %s", type(task.exception()).__name__)
+                raise asyncio.CancelledError
+            return task.result()
+    return wrapped
 
 
 class QQAdminDB:
@@ -49,43 +72,46 @@ class QQAdminDB:
         self._conn = None
         self._cache = {}
         self._initialized = False
-        self._init_lock = asyncio.Lock()
+        self._write_lock = asyncio.Lock()
 
     # ============================== 初始化 ==============================
 
+    @connection_locked
     async def init(self):
-        async with self._init_lock:
-            if self._initialized:
-                return
+        if self._initialized:
+            return
 
-            self.db_path.parent.mkdir(parents=True, exist_ok=True)
-            self._conn = await aiosqlite.connect(str(self.db_path))
-            self._conn.row_factory = aiosqlite.Row
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._conn = await aiosqlite.connect(str(self.db_path))
+        self._conn.row_factory = aiosqlite.Row
 
-            await self._conn.execute("""
-                CREATE TABLE IF NOT EXISTS groups (
-                    group_id TEXT PRIMARY KEY,
-                    data TEXT NOT NULL
-                );
+        try:
+            await self._execute_write("""
+            CREATE TABLE IF NOT EXISTS groups (
+                group_id TEXT PRIMARY KEY,
+                data TEXT NOT NULL
+            );
             """)
-            await self._conn.commit()
-
-            # 加载缓存
+            cache = {}
             async with self._conn.execute("SELECT group_id, data FROM groups;") as cur:
                 async for row in cur:
                     try:
-                        self._cache[row["group_id"]] = json.loads(row["data"])
+                        cache[row["group_id"]] = json.loads(row["data"])
                     except Exception:
                         logger.exception("解析 group 数据失败: %s", row["group_id"])
+        except BaseException:
+            if self._conn:
+                await self._finish_cleanup(self._conn.close())
+            self._conn = None
+            raise
 
-            self._initialized = True
-            logger.info("QQAdminDB initialized (%d groups)", len(self._cache))
+        self._cache = cache
+        self._initialized = True
+        logger.info("QQAdminDB initialized (%d groups)", len(self._cache))
 
     async def _save_to_db(self, gid: str, data):
-        if not self._conn:
-            raise RuntimeError("请先 init()")
-
-        await self._conn.execute(
+        """调用方必须持有连接锁；缓存只在本方法成功后发布。"""
+        await self._execute_write(
             """
             INSERT INTO groups(group_id, data)
             VALUES (?, ?)
@@ -93,7 +119,38 @@ class QQAdminDB:
             """,
             (gid, json.dumps(data, ensure_ascii=False)),
         )
-        await self._conn.commit()
+
+    async def _execute_write(self, sql, params=()):
+        if not self._conn:
+            raise RuntimeError("请先 init()")
+        try:
+            await self._conn.execute("BEGIN")
+            await self._conn.execute(sql, params)
+            await self._conn.commit()
+        except BaseException:
+            # aiosqlite 工作线程仍可能在执行被取消的 SQL；排队回滚并等待完成后才释放锁。
+            try:
+                await self._finish_cleanup(self._conn.rollback())
+            except BaseException:
+                await self._finish_cleanup(self._conn.close())
+                self._conn = None
+                self._initialized = False
+                raise
+            raise
+
+    @staticmethod
+    async def _finish_cleanup(operation):
+        task = asyncio.ensure_future(operation)
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+        return task.result()
+
+    async def _publish(self, gid, candidate):
+        await self._save_to_db(gid, candidate)
+        self._cache[gid] = candidate
 
     def _strip_meta_fields(self, data: dict | None) -> dict | None:
         if data is None:
@@ -133,13 +190,11 @@ class QQAdminDB:
 
     # ============================== 基础：确保配置存在 ==============================
 
+    @connection_locked
     async def ensure_group(self, gid: str):
         """确保存在群配置，若没有则按 default_cfg 初始化"""
         if gid not in self._cache or self._is_follow_default_data(self._cache.get(gid)):
-            self._cache[gid] = self._build_explicit_group_record(
-                self.get_group_snapshot(gid)
-            )
-            await self._save_to_db(gid, self._cache[gid])
+            await self._publish(gid, self._build_explicit_group_record(self.get_group_snapshot(gid)))
 
     def list_group_ids(self) -> list[str]:
         return sorted(
@@ -163,6 +218,7 @@ class QQAdminDB:
 
     # ============================== API ==============================
 
+    @connection_locked
     async def all(self, gid: str) -> dict:
         """
         获取整个配置，并自动补齐 default_cfg 的字段
@@ -170,7 +226,7 @@ class QQAdminDB:
         if self.is_group_follow_default(gid):
             return self.get_group_snapshot(gid)
 
-        data = self._cache[gid]
+        data = copy.deepcopy(self._cache[gid])
 
         changed = False
         for k, v in self.default_cfg.items():
@@ -183,10 +239,11 @@ class QQAdminDB:
             changed = True
 
         if changed:
-            await self._save_to_db(gid, data)
+            await self._publish(gid, data)
 
         return self.get_group_snapshot(gid)
 
+    @connection_locked
     async def get(self, gid: str, field: str, default=None):
         """
         读字段，不存在则补齐 default
@@ -197,58 +254,66 @@ class QQAdminDB:
                 return snapshot[field]
             return json.loads(json.dumps(default))
 
-        data = self._cache[gid]
+        data = copy.deepcopy(self._cache[gid])
 
         if field not in data:
             data[field] = json.loads(json.dumps(default))
-            await self._save_to_db(gid, data)
+            await self._publish(gid, data)
 
-        return data[field]
+        return copy.deepcopy(data[field])
 
+    @connection_locked
     async def set(self, gid: str, field: str, value):
         """
         写入字段
         """
-        await self.ensure_group(gid)
-        self._cache[gid][field] = value
-        await self._save_to_db(gid, self._cache[gid])
+        candidate = self._build_explicit_group_record(self.get_group_snapshot(gid))
+        candidate[field] = copy.deepcopy(value)
+        await self._publish(gid, candidate)
 
+    @connection_locked
     async def replace_group(self, gid: str, data: dict):
-        self._cache[gid] = self._build_explicit_group_record(data)
-        await self._save_to_db(gid, self._cache[gid])
+        await self._publish(gid, self._build_explicit_group_record(data))
 
+    @connection_locked
     async def add(self, gid: str, field: str, value):
         """
         列表字段追加（自动创建列表）
         """
-        lst = list(await self.get(gid, field, []))
+        candidate = self._build_explicit_group_record(self.get_group_snapshot(gid))
+        lst = list(candidate.get(field, []))
         if value not in lst:
             lst.append(value)
-            await self.set(gid, field, lst)
+            candidate[field] = copy.deepcopy(lst)
+            await self._publish(gid, candidate)
 
+    @connection_locked
     async def remove(self, gid: str, field: str, value):
         """
         列表字段删除（自动创建列表）
         """
-        lst = [i for i in await self.get(gid, field, []) if i != value]
-        await self.set(gid, field, lst)
+        candidate = self._build_explicit_group_record(self.get_group_snapshot(gid))
+        candidate[field] = [i for i in candidate.get(field, []) if i != value]
+        await self._publish(gid, candidate)
 
     # ============================== 删除群配置 ==============================
 
+    @connection_locked
     async def delete_group(self, gid: str):
         """彻底删除群配置"""
-        if self._conn:
-            await self._conn.execute("DELETE FROM groups WHERE group_id = ?", (gid,))
-            await self._conn.commit()
+        await self._execute_write("DELETE FROM groups WHERE group_id = ?", (gid,))
         self._cache.pop(gid, None)
 
     # ============================== 关闭 ==============================
 
+    @connection_locked
     async def close(self):
         if self._conn:
-            await self._conn.close()
-            self._conn = None
-            self._initialized = False
+            try:
+                await self._finish_cleanup(self._conn.close())
+            finally:
+                self._conn = None
+                self._initialized = False
 
     # ====================== 中文展示、读回 ======================
 
@@ -281,6 +346,7 @@ class QQAdminDB:
 
         return "\n".join(lines)
 
+    @connection_locked
     async def import_cn_lines(self, gid: str, text: str) -> dict:
         """
         解析用户提交的中文多行文本并写回 DB
@@ -289,8 +355,7 @@ class QQAdminDB:
         - 数字：自动转 int
         - 字符串：原样保存
         """
-        await self.ensure_group(gid)
-        data = self._cache[gid]
+        data = self._build_explicit_group_record(self.get_group_snapshot(gid))
 
         for line in text.splitlines():
             if ":" not in line:
@@ -331,26 +396,20 @@ class QQAdminDB:
 
             data[eng_key] = value
 
-        await self._save_to_db(gid, data)
+        await self._publish(gid, data)
         return self.get_group_snapshot(gid)
 
+    @connection_locked
     async def follow_default(self, gid: str | None = None):
         """让指定群（或全部群）重新跟随默认群配置"""
         if gid is None:
-            if self._conn:
-                await self._conn.execute("DELETE FROM groups")
-                await self._conn.commit()
+            await self._execute_write("DELETE FROM groups")
             self._cache.clear()
             logger.info("所有群聊的群管配置已重新跟随默认值")
             return
 
         normalized_gid = str(gid)
-        if self._conn:
-            await self._conn.execute(
-                "DELETE FROM groups WHERE group_id = ?",
-                (normalized_gid,),
-            )
-            await self._conn.commit()
+        await self._execute_write("DELETE FROM groups WHERE group_id = ?", (normalized_gid,))
         self._cache.pop(normalized_gid, None)
         logger.info(f"群聊{normalized_gid}的群管配置已重新跟随默认值")
 

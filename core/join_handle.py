@@ -8,6 +8,7 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
 from ..config import PluginConfig
 from ..data import QQAdminDB
 from ..utils import get_nickname, get_reply_message_str, parse_bool
+from .welcome import build_welcome
 
 
 class JoinHandle:
@@ -328,13 +329,7 @@ class JoinHandle:
 
         # 进群欢迎、禁言
         elif raw.get("notice_type") == "group_increase" and uid != event.get_self_id():
-            # 进群欢迎
-            join_welcome = await self.db.get(gid, "join_welcome")
-            if join_welcome:
-                nickname = await get_nickname(event, uid)
-                welcome = join_welcome.format(nickname=nickname)
-                await event.send(event.plain_result(welcome))
-            # 进群禁言
+            # 先禁言，避免欢迎图片加载或取消延迟处罚。
             join_ban_time = await self.db.get(gid, "join_ban_time")
             if join_ban_time > 0:
                 try:
@@ -345,6 +340,17 @@ class JoinHandle:
                     )
                 except Exception:
                     pass
+            # 进群欢迎
+            join_welcome = await self.db.get(gid, "join_welcome")
+            if join_welcome:
+                try:
+                    nickname = await get_nickname(event, uid)
+                    chain = await build_welcome(
+                        join_welcome, uid, nickname, self.cfg.welcome_image_dir
+                    )
+                    await event.send(event.chain_result(chain))
+                except Exception as e:
+                    logger.warning("发送进群欢迎失败 (%s)", type(e).__name__)
 
     async def set_approve(
         self, event: AiocqhttpMessageEvent, extra: str = "", approve: bool = True

@@ -142,6 +142,8 @@ class PluginConfig(ConfigNode):
             self.curfew_file.write_text("{}", encoding="utf-8")
         self.file_dir = self.data_dir / "file"
         self.file_dir.mkdir(parents=True, exist_ok=True)
+        self.welcome_image_dir = self.data_dir / "welcome_images"
+        self.welcome_image_dir.mkdir(parents=True, exist_ok=True)
 
         self.spamming_count = 5
         self.spamming_interval = 0.5

@@ -1,0 +1,6 @@
+aiohttp
+aiocqhttp
+aiosqlite
+APScheduler>=3,<4
+Quart
+Pillow>=10

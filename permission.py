@@ -74,7 +74,10 @@ class PermissionManager:
         self, event: AiocqhttpMessageEvent, user_id: str | int
     ) -> PermLevel:
         group_id = event.get_group_id()
-        if int(group_id) == 0 or int(user_id) == 0:
+        try:
+            if int(group_id) <= 0 or int(user_id) <= 0:
+                return PermLevel.UNKNOWN
+        except (ValueError, TypeError):
             return PermLevel.UNKNOWN
         if self.cfg and str(user_id) in self.cfg.admins_id:
             return PermLevel.SUPERUSER
@@ -84,8 +87,13 @@ class PermissionManager:
             )
         except Exception:
             return PermLevel.UNKNOWN
+        if not isinstance(info, dict):
+            return PermLevel.UNKNOWN
         role = info.get("role", "unknown")
-        level = int(info.get("level", 0))
+        try:
+            level = int(info.get("level", 0))
+        except (ValueError, TypeError):
+            return PermLevel.UNKNOWN
         group_config = (
             self.db.get_group_snapshot(group_id)
             if self.db is not None
@@ -160,6 +168,25 @@ class PermissionManager:
             perm_key=perm_key,
             check_at=False,
         )
+
+    async def target_block(self, event, target_id) -> str | None:
+        if isinstance(target_id, bool):
+            return "无效的目标QQ"
+        try:
+            if int(target_id) <= 0 or str(int(target_id)) != str(target_id):
+                return "无效的目标QQ"
+        except (ValueError, TypeError):
+            return "无效的目标QQ"
+        bot_level = await self.get_perm_level(event, event.get_self_id())
+        target_level = await self.get_perm_level(event, target_id)
+        if (
+            bot_level > PermLevel.ADMIN
+            or target_level == PermLevel.UNKNOWN
+            or bot_level >= target_level
+            or str(target_id) == str(event.get_self_id())
+        ):
+            return f"我动不了{target_level}"
+        return None
 
 
 perm_manager = PermissionManager()

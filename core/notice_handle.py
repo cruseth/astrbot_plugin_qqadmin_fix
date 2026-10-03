@@ -42,12 +42,14 @@ class NoticeHandle:
             if not image_path:
                 return "图片获取失败"
 
-            await event.bot._send_group_notice(
-                group_id=int(event.get_group_id()),
-                content=content,
-                image=str(image_path),
-            )
-        event.stop_event()
+        params = {"group_id": int(gid), "content": content}
+        if image_path:
+            params["image"] = str(image_path)
+        try:
+            await event.bot._send_group_notice(**params)
+        except Exception as e:
+            logger.warning(f"发布群公告失败: {e}")
+            return "群公告发布失败"
         return "群公告已发布"
 
     async def get_group_notice(self, event: AiocqhttpMessageEvent):

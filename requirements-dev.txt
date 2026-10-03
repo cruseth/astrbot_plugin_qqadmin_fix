@@ -1,0 +1,5 @@
+pytest>=8,<10
+aiosqlite>=0.20
+aiohttp
+aiocqhttp==1.4.4
+Pillow
