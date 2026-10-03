@@ -1,4 +1,4 @@
-name: astrbot_plugin_qqadmin
+name: astrbot_plugin_qqadmin_fix
 display_name: QQ群管
 desc: "[仅aiocqhttp]群管插件，功能包括：禁言、全体禁言、踢人、拉黑、改群昵称、改头衔、设管理员、设精华、撤回消息、改群头像、改群名、发群公告、整理群友信息等等"
 help: 略

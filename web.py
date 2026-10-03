@@ -18,7 +18,7 @@ from .data import QQAdminDB
 from .group_info_cache import QQGroupInfoCache
 from .page_service import QQAdminPageService
 
-PLUGIN_NAME = "astrbot_plugin_qqadmin"
+PLUGIN_NAME = "astrbot_plugin_qqadmin_fix"
 
 
 class QQAdminWebController:

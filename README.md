@@ -1,9 +1,9 @@
 
 <div align="center">
 
-![:name](https://count.getloli.com/@astrbot_plugin_QQAdmin?name=astrbot_plugin_QQAdmin&theme=minecraft&padding=6&offset=0&align=top&scale=1&pixelated=1&darkmode=auto)
+![:name](https://count.getloli.com/@astrbot_plugin_qqadmin_fix?name=astrbot_plugin_qqadmin_fix&theme=minecraft&padding=6&offset=0&align=top&scale=1&pixelated=1&darkmode=auto)
 
-# astrbot_plugin_qqadmin
+# astrbot_plugin_qqadmin_fix
 
 _✨ QQ群管插件 ✨_  
 
@@ -23,7 +23,7 @@ _✨ QQ群管插件 ✨_
 
 ## 📦 安装
 
-在astrbot的插件市场搜索astrbot_plugin_qqadmin，点击安装即可  
+本仓库是修复分支，未发布到插件市场。请在 AstrBot 中通过插件仓库地址 `https://github.com/cruseth/astrbot_plugin_qqadmin_fix` 安装，或手动放置到 `data/plugins/astrbot_plugin_qqadmin_fix`。  
 
 ## ⌨️ 使用说明
 
@@ -116,7 +116,7 @@ _✨ QQ群管插件 ✨_
 - CQ 提及仅支持数字 QQ 号或 `{qq}`，不支持 `all`；保留 `{at}` 的简写。未知或格式不合法的 CQ 码原样作为文字显示。
 - 配置面板中“进群欢迎词”下方提供“欢迎 CQ 提及”和“欢迎 CQ 图片”两个开关，默认开启，可分别关闭。
   关闭“欢迎 CQ 提及”后，`{at}` 与 `[CQ:at,...]` 不再生成真正的提及，只作为普通文字原样发送；关闭“欢迎 CQ 图片”后，`[CQ:image,...]` 不再加载图片，只作为普通文字原样发送。两个开关相互独立，本地图片与远程图片的安全限制不受影响。
-- 本地图片放在 AstrBot 插件数据目录的 `welcome_images` 中，通常为 `data/plugin_data/astrbot_plugin_qqadmin/welcome_images/`（相对于 AstrBot 工作目录，不是 `data/plugins/` 源码目录）。模板只填写该目录内的相对文件名；不允许目录外路径、软链接穿越或图片路径中的 `{nickname}`、`{qq}` 等占位符。
+- 本地图片放在 AstrBot 插件数据目录的 `welcome_images` 中，通常为 `data/plugin_data/astrbot_plugin_qqadmin_fix/welcome_images/`（相对于 AstrBot 工作目录，不是 `data/plugins/` 源码目录）。模板只填写该目录内的相对文件名；不允许目录外路径、软链接穿越或图片路径中的 `{nickname}`、`{qq}` 等占位符。
 - 支持 PNG、JPEG、GIF、WebP、BMP，扩展名须与真实格式相符。每张图片不超过 5MB，累计帧像素不超过 2000 万；每次欢迎最多尝试 3 张图片，单张加载最多等待 10 秒。
 - 远程图片仅支持公开 HTTP/HTTPS 地址、80/443 端口；不支持内网、回环、保留地址、认证地址或环境代理。最多跟随 3 次重定向，每跳均重新检查目标。
 - 开启进群禁言时，先尝试禁言，再加载图片并发送欢迎；禁言失败仍会发送欢迎。图片不可用时显示文字提示，其余欢迎文字和提及仍保留，欢迎加载或发送失败不影响此前的禁言操作。

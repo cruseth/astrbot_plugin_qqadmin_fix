@@ -112,7 +112,7 @@
       },
       "builtin_ban": {
         "description": "启用内置禁词",
-        "hint": "插件内置了一个敏感词库, 如需自定义请自行修改：data/plugins/astrbot_plugin_qqadmin/SensitiveLexicon.json, 不建议开启，让群管理员通过命令“ 内置禁词 开/关 ”来为当前群聊设置",
+        "hint": "插件内置了一个敏感词库, 如需自定义请自行修改：data/plugins/astrbot_plugin_qqadmin_fix/SensitiveLexicon.json, 不建议开启，让群管理员通过命令“ 内置禁词 开/关 ”来为当前群聊设置",
         "type": "bool",
         "default": false
       },
