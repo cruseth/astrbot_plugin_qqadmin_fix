@@ -343,10 +343,21 @@ class JoinHandle:
             # 进群欢迎
             join_welcome = await self.db.get(gid, "join_welcome")
             if join_welcome:
+                # 开关与自定义面板同源，取有效配置快照，避免 db.get 的缺省写回造成分叉
+                group_config = self.db.get_group_snapshot(gid)
                 try:
                     nickname = await get_nickname(event, uid)
                     chain = await build_welcome(
-                        join_welcome, uid, nickname, self.cfg.welcome_image_dir
+                        join_welcome,
+                        uid,
+                        nickname,
+                        self.cfg.welcome_image_dir,
+                        cq_mention=bool(
+                            group_config.get("join_welcome_cq_mention", True)
+                        ),
+                        cq_image=bool(
+                            group_config.get("join_welcome_cq_image", True)
+                        ),
                     )
                     await event.send(event.chain_result(chain))
                 except Exception as e:

@@ -49,6 +49,8 @@ class QQAdminDB:
         "reject_word_block": "命中黑词拉黑",
         "block_ids": "进群黑名单",
         "join_welcome": "进群欢迎词",
+        "join_welcome_cq_mention": "欢迎 CQ 提及",
+        "join_welcome_cq_image": "欢迎 CQ 图片",
         "join_ban_time": "进群禁言时长",
         "leave_notify": "主动退群通知",
         "leave_block": "主动退群拉黑",

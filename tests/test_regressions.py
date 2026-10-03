@@ -348,9 +348,10 @@ def test_block_persists_and_partial_failures(code, setup, tmp_path):
 
 def test_welcome_components_and_failure_isolation(code, tmp_path):
     async def scenario():
-        db = types.SimpleNamespace(get=AsyncMock(side_effect=lambda gid, key:
+        db = types.SimpleNamespace(get=AsyncMock(side_effect=lambda gid, key, default=None:
             {"join_welcome": "欢迎{at} {qq} {nickname} {unknown} [CQ:at,qq=1]",
-             "join_ban_time": 60}[key]))
+             "join_ban_time": 60}.get(key, default)),
+            get_group_snapshot=lambda gid: {})
         handle = code.join.JoinHandle(types.SimpleNamespace(welcome_image_dir=tmp_path), db)
         event = Event()
         event.message_obj.raw_message = {"notice_type": "group_increase", "group_id": 10, "user_id": 20}
@@ -364,6 +365,35 @@ def test_welcome_components_and_failure_isolation(code, tmp_path):
         event.send.side_effect = RuntimeError("offline")
         await handle.event_monitoring(event)
         event.bot.set_group_ban.assert_awaited_once()
+    run(scenario())
+
+
+def test_welcome_cq_switches_chinese_field_map(code, tmp_path):
+    field_map = code.data.QQAdminDB.FIELD_MAP
+    assert field_map["join_welcome_cq_mention"] == "欢迎 CQ 提及"
+    assert field_map["join_welcome_cq_image"] == "欢迎 CQ 图片"
+    reverse = code.data.QQAdminDB.REVERSE_FIELD_MAP
+    assert reverse["欢迎 CQ 提及"] == "join_welcome_cq_mention"
+    assert reverse["欢迎 CQ 图片"] == "join_welcome_cq_image"
+
+    async def scenario():
+        cfg = types.SimpleNamespace(
+            db_path=tmp_path / "field-map.db",
+            default={"join_welcome_cq_mention": True, "join_welcome_cq_image": True},
+        )
+        db = code.data.QQAdminDB(cfg)
+        await db.init()
+        try:
+            exported = await db.export_cn_lines("10")
+            assert "欢迎 CQ 提及: 开" in exported
+            assert "欢迎 CQ 图片: 开" in exported
+            assert "join_welcome_cq_mention" not in exported
+            updated = await db.import_cn_lines(
+                "10", "欢迎 CQ 提及: 关\n欢迎 CQ 图片: 关")
+            assert updated["join_welcome_cq_mention"] is False
+            assert updated["join_welcome_cq_image"] is False
+        finally:
+            await db.close()
     run(scenario())
 
 

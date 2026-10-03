@@ -3,6 +3,7 @@ import asyncio
 import importlib
 import importlib.util
 import io
+import json
 import logging
 import socket
 import sys
@@ -301,9 +302,9 @@ def test_overall_timeout(code, directory, monkeypatch):
 
 @pytest.mark.parametrize("send_fails", [False, True])
 def test_failed_image_and_send_still_ban(code, directory, send_fails):
-    async def get(gid, key):
+    async def get(gid, key, default=None):
         return {"join_welcome": "{at}[CQ:image,file=missing.png]tail",
-                "join_ban_time": 60}[key]
+                "join_ban_time": 60}.get(key, default)
     event = types.SimpleNamespace(
         message_obj=types.SimpleNamespace(raw_message={
             "notice_type": "group_increase", "group_id": 10, "user_id": 20}),
@@ -312,7 +313,7 @@ def test_failed_image_and_send_still_ban(code, directory, send_fails):
         send=AsyncMock(side_effect=RuntimeError("send") if send_fails else None))
     handler = code.join.JoinHandle(
         types.SimpleNamespace(welcome_image_dir=directory),
-        types.SimpleNamespace(get=get))
+        types.SimpleNamespace(get=get, get_group_snapshot=lambda gid: {}))
     run(handler.event_monitoring(event))
     assert text(event.send.await_args.args[0]) == "[欢迎图片不可用]tail"
     event.bot.set_group_ban.assert_awaited_once_with(
@@ -325,13 +326,14 @@ def test_ban_precedes_slow_or_cancelled_welcome(code, directory, monkeypatch, ca
         started = asyncio.Event()
         release = asyncio.Event()
 
-        async def slow_build(*args):
+        async def slow_build(*args, **kwargs):
             started.set()
             await release.wait()
             return [Plain("welcome")]
 
-        async def get(gid, key):
-            return {"join_welcome": "welcome", "join_ban_time": 60}[key]
+        async def get(gid, key, default=None):
+            return {"join_welcome": "welcome", "join_ban_time": 60}.get(
+                key, default)
 
         monkeypatch.setattr(code.join, "build_welcome", slow_build)
         event = types.SimpleNamespace(
@@ -342,7 +344,7 @@ def test_ban_precedes_slow_or_cancelled_welcome(code, directory, monkeypatch, ca
             send=AsyncMock())
         handler = code.join.JoinHandle(
             types.SimpleNamespace(welcome_image_dir=directory),
-            types.SimpleNamespace(get=get))
+            types.SimpleNamespace(get=get, get_group_snapshot=lambda gid: {}))
         task = asyncio.create_task(handler.event_monitoring(event))
         try:
             await asyncio.wait_for(started.wait(), timeout=1)
@@ -369,8 +371,9 @@ def test_ban_precedes_slow_or_cancelled_welcome(code, directory, monkeypatch, ca
 
 
 def test_ban_failure_still_sends_welcome(code, directory, monkeypatch):
-    async def get(gid, key):
-        return {"join_welcome": "welcome", "join_ban_time": 60}[key]
+    async def get(gid, key, default=None):
+        return {"join_welcome": "welcome", "join_ban_time": 60}.get(
+            key, default)
 
     builder = AsyncMock(return_value=[Plain("welcome")])
     monkeypatch.setattr(code.join, "build_welcome", builder)
@@ -382,8 +385,122 @@ def test_ban_failure_still_sends_welcome(code, directory, monkeypatch):
         send=AsyncMock())
     handler = code.join.JoinHandle(
         types.SimpleNamespace(welcome_image_dir=directory),
-        types.SimpleNamespace(get=get))
+        types.SimpleNamespace(get=get, get_group_snapshot=lambda gid: {}))
     run(handler.event_monitoring(event))
     event.bot.set_group_ban.assert_awaited_once()
     builder.assert_awaited_once()
+    event.send.assert_awaited_once()
+
+
+def test_schema_exposes_welcome_cq_switches():
+    schema = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
+    items = schema["default"]["items"]
+    keys = list(items)
+    assert keys.index("join_welcome_cq_mention") > keys.index("join_welcome")
+    assert keys.index("join_welcome_cq_image") > keys.index("join_welcome")
+    mention = items["join_welcome_cq_mention"]
+    image = items["join_welcome_cq_image"]
+    assert mention["description"] == "欢迎 CQ 提及"
+    assert image["description"] == "欢迎 CQ 图片"
+    for field in (mention, image):
+        assert field["type"] == "bool"
+        assert field["default"] is True
+        assert field["hint"]
+
+
+def test_mention_disabled_keeps_plain_text(code, directory):
+    chain = run(code.w.build_welcome(
+        "hi {at} [CQ:at,qq=123] [CQ:at,qq={qq}]", "20", "nick", directory,
+        cq_mention=False))
+    assert not any(isinstance(p, At) for p in chain)
+    assert text(chain) == "hi {at} [CQ:at,qq=123] [CQ:at,qq={qq}]"
+
+
+def test_image_disabled_keeps_plain_text_without_loading(code, directory, monkeypatch):
+    loader = AsyncMock()
+    monkeypatch.setattr(code.w, "load_image", loader)
+    template = "before[CQ:image,file=ok.png][CQ:image,file=https://public.test/a]after"
+    chain = run(code.w.build_welcome(template, "20", "", directory, cq_image=False))
+    loader.assert_not_awaited()
+    assert not any(isinstance(p, Image) for p in chain)
+    assert text(chain) == template
+
+
+def test_welcome_switches_are_independent(code, directory, monkeypatch):
+    loader = AsyncMock()
+    monkeypatch.setattr(code.w, "load_image", loader)
+    chain = run(code.w.build_welcome(
+        "{at}[CQ:image,file=ok.png][CQ:at,qq=99]", "20", "", directory,
+        cq_image=False))
+    assert [p.qq for p in chain if isinstance(p, At)] == ["20", "99"]
+    loader.assert_not_awaited()
+    assert text(chain) == "[CQ:image,file=ok.png]"
+
+
+def increase_event(code, directory, monkeypatch, builder, snapshot):
+    monkeypatch.setattr(code.join, "build_welcome", builder)
+    event = types.SimpleNamespace(
+        message_obj=types.SimpleNamespace(raw_message={
+            "notice_type": "group_increase", "group_id": 10, "user_id": 20}),
+        bot=types.SimpleNamespace(set_group_ban=AsyncMock()),
+        get_self_id=lambda: "99", chain_result=lambda chain: chain,
+        send=AsyncMock())
+
+    async def get(gid, key, default=None):
+        return {"join_welcome": "welcome", "join_ban_time": 0}.get(key, default)
+
+    handler = code.join.JoinHandle(
+        types.SimpleNamespace(welcome_image_dir=directory),
+        types.SimpleNamespace(get=get, get_group_snapshot=lambda gid: dict(snapshot)))
+    run(handler.event_monitoring(event))
+    return event
+
+
+def test_event_monitoring_passes_welcome_switches(code, directory, monkeypatch):
+    builder = AsyncMock(return_value=[Plain("welcome")])
+    event = increase_event(
+        code, directory, monkeypatch, builder,
+        {"join_welcome_cq_mention": False, "join_welcome_cq_image": False},
+    )
+    assert builder.await_args.kwargs == {"cq_mention": False, "cq_image": False}
+    event.send.assert_awaited_once()
+
+
+def test_event_monitoring_defaults_welcome_switches_on(code, directory, monkeypatch):
+    builder = AsyncMock(return_value=[Plain("welcome")])
+    event = increase_event(code, directory, monkeypatch, builder, {})
+    assert builder.await_args.kwargs == {"cq_mention": True, "cq_image": True}
+    event.send.assert_awaited_once()
+
+
+def test_event_monitoring_reads_switches_from_snapshot(code, directory, monkeypatch):
+    """开关必须来自 get_group_snapshot，而不是 db.get 的缺省写回。"""
+    builder = AsyncMock(return_value=[Plain("welcome")])
+    read_keys = []
+    monkeypatch.setattr(code.join, "build_welcome", builder)
+    event = types.SimpleNamespace(
+        message_obj=types.SimpleNamespace(raw_message={
+            "notice_type": "group_increase", "group_id": 10, "user_id": 20}),
+        bot=types.SimpleNamespace(set_group_ban=AsyncMock()),
+        get_self_id=lambda: "99", chain_result=lambda chain: chain,
+        send=AsyncMock())
+
+    async def get(gid, key, default=None):
+        read_keys.append(key)
+        return {"join_welcome": "welcome", "join_ban_time": 0}.get(key, default)
+
+    snapshot = {
+        "join_welcome": "welcome",
+        "join_ban_time": 0,
+        "join_welcome_cq_mention": False,
+        "join_welcome_cq_image": False,
+    }
+    handler = code.join.JoinHandle(
+        types.SimpleNamespace(welcome_image_dir=directory),
+        types.SimpleNamespace(get=get, get_group_snapshot=lambda gid: dict(snapshot)))
+    run(handler.event_monitoring(event))
+
+    assert builder.await_args.kwargs == {"cq_mention": False, "cq_image": False}
+    assert "join_welcome_cq_mention" not in read_keys
+    assert "join_welcome_cq_image" not in read_keys
     event.send.assert_awaited_once()

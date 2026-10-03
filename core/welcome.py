@@ -194,31 +194,37 @@ async def load_image(source: str, directory: Path):
     return Image.fromBytes(data)
 
 
-def _text(chain: list, text: str, uid: str, nickname: str):
+def _text(
+    chain: list, text: str, uid: str, nickname: str, cq_mention: bool = True
+):
     for part in PLACEHOLDER.split(text):
-        if part == "{at}" and re.fullmatch(r"[0-9]+", uid):
+        if part == "{at}" and cq_mention and re.fullmatch(r"[0-9]+", uid):
             chain.append(At(qq=uid))
         elif part:
             chain.append(Plain(text={"{qq}": uid, "{nickname}": nickname}.get(part, part)))
 
 
-async def build_welcome(template: str, uid: str, nickname: str, directory: Path) -> list:
+async def build_welcome(
+    template: str, uid: str, nickname: str, directory: Path,
+    cq_mention: bool = True, cq_image: bool = True,
+) -> list:
     chain = []
     cursor = images = 0
     for match in CQ_LEXEME.finditer(template):
         _text(chain, Message(template[cursor:match.start()]).extract_plain_text(),
-              uid, nickname)
+              uid, nickname, cq_mention)
         raw = match.group()
         segments = Message(raw)
         segment = segments[0] if len(segments) == 1 else None
-        if segment is not None and segment.type == "at" and set(segment.data) == {"qq"}:
+        if (cq_mention and segment is not None and segment.type == "at"
+                and set(segment.data) == {"qq"}):
             target = segment.data["qq"]
             target = uid if target == "{qq}" else target
             if re.fullmatch(r"[0-9]+", target):
                 chain.append(At(qq=target))
             else:
                 chain.append(Plain(text=raw))
-        elif (segment is not None and segment.type == "image"
+        elif (cq_image and segment is not None and segment.type == "image"
               and set(segment.data) in ({"file"}, {"url"})):
             images += 1
             if images > MAX_IMAGES:
@@ -232,5 +238,6 @@ async def build_welcome(template: str, uid: str, nickname: str, directory: Path)
         else:
             chain.append(Plain(text=raw))
         cursor = match.end()
-    _text(chain, Message(template[cursor:]).extract_plain_text(), uid, nickname)
+    _text(chain, Message(template[cursor:]).extract_plain_text(), uid, nickname,
+          cq_mention)
     return chain

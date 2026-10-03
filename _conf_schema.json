@@ -75,6 +75,18 @@
         "type": "string",
         "default": ""
       },
+      "join_welcome_cq_mention": {
+        "description": "欢迎 CQ 提及",
+        "hint": "关闭后，欢迎语中的 {at} 和 [CQ:at,...] 不再生成真正的提及，只作为普通文字原样发送。",
+        "type": "bool",
+        "default": true
+      },
+      "join_welcome_cq_image": {
+        "description": "欢迎 CQ 图片",
+        "hint": "关闭后，欢迎语中的 [CQ:image,...] 不再加载图片，只作为普通文字原样发送。本地图片与远程图片的安全限制保持不变。",
+        "type": "bool",
+        "default": true
+      },
       "join_ban_time": {
         "description": "进群禁言时长",
         "hint": "单位为秒，新成员进群时，自动禁言该成员",
